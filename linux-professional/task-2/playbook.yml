@@ -1,0 +1,57 @@
+---
+- name: Создать RAID
+  hosts: raid_hosts
+  become: true
+  vars:
+    mdadm_conf: /etc/mdadm/mdadm.conf
+
+  tasks:
+    - name: Остановить RAID если он есть с этим именем
+      command: mdadm --stop {{ raid_device }}
+      ignore_errors: true
+
+    - name: Очистить данные о RAID с диска
+      command: mdadm --zero-superblock {{ item }}
+      loop: "{{ raid_devices }}"
+      ignore_errors: true
+
+    - name: Создать RAID с выбранными параметрами
+      command: >
+        mdadm --create {{ raid_device }} -l {{ raid_level }} -n {{ raid_devices | length }} {{ raid_devices | join(' ') }} --force --run
+      args:
+        creates: "{{ raid_device }}"
+
+    - name: Ждать завершения создания RAID
+      wait_for:
+        path: "{{ raid_device }}"
+        timeout: 60
+
+    - name: Создать файловую систему по параметрам
+      filesystem:
+        fstype: "{{ filesystem }}"
+        dev: "{{ raid_device }}"
+
+    - name: Создать папку для монтирования
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+        mode: '0755'
+
+    - name: Примонтировать RAID
+      mount:
+        path: "{{ mount_point }}"
+        src: "{{ raid_device }}"
+        fstype: "{{ filesystem }}"
+        state: mounted
+
+    - name: Зафейлить один из дисков
+      command: >
+        mdadm {{ raid_device }} --fail {{ failed_disk }}
+
+    - name: Убрать из RAID "сломанный" диск
+      command: >
+        mdadm {{ raid_device }} --remove {{ failed_disk }}
+
+    - name: Вернем диск обратно (как буд-то это новый диск)
+      command: >
+        mdadm {{ raid_device }} --add {{ failed_disk }}
