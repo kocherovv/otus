@@ -2,6 +2,8 @@
 - name: Создать RAID
   hosts: raid_hosts
   become: true
+  vars:
+    mdadm_conf: /etc/mdadm/mdadm.conf
 
   tasks:
     - name: Остановить RAID если он есть с этим именем
