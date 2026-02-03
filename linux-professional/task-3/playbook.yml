@@ -1,57 +1,99 @@
 ---
 - name: Создать RAID
-  hosts: raid_hosts
+  hosts: test_hosts
   become: true
-  vars:
-    mdadm_conf: /etc/mdadm/mdadm.conf
 
   tasks:
-    - name: Остановить RAID если он есть с этим именем
-      command: mdadm --stop {{ raid_device }}
-      ignore_errors: true
+    ## Уменьшаем / перемещаем его на другой том
+    - name: Создать PV для диска с резернвной рутовой директорией
+      command: pvcreate {{ root_disk }}
 
-    - name: Очистить данные о RAID с диска
-      command: mdadm --zero-superblock {{ item }}
-      loop: "{{ raid_devices }}"
-      ignore_errors: true
+    - name: Создать VG для второй рут директории
+      command: vgcreate {{ vg_root_name }} {{ root_disk }}
 
     - name: Создать RAID с выбранными параметрами
-      command: >
-        mdadm --create {{ raid_device }} -l {{ raid_level }} -n {{ raid_devices | length }} {{ raid_devices | join(' ') }} --force --run
+      command: lvcreate -n {{ lv_root_name }} -l +100%FREE /dev/{{ vg_root_name }}
+
+    - name: Создать файловую систему на логическом томе
+      command: mkfs.ext4 /dev/{{ vg_root_name }}/{{ lv_root_name }}
+
+    - name: Монтируем новый раздел
+      command: mount /dev/{{ vg_root_name }}/{{ lv_root_name }} /mnt
+
+    - name: Копируем все данные оригинального рута
+      command: rsync -avxHAX --progress / /mnt/
+
+    - name: Конфигурируем grub для того, чтобы при старте перейти в новый /.
+      shell: |
+        for i in /proc /sys /dev /run /boot; do
+          mount --bind $i /mnt/$i
+        done
+
+        chroot /mnt /bin/bash <<'EOF'
+        grub-mkconfig -o /boot/grub/grub.cfg
+        update-initramfs -u
+        EOF
       args:
-        creates: "{{ raid_device }}"
+        executable: /bin/bash
 
-    - name: Ждать завершения создания RAID
-      wait_for:
-        path: "{{ raid_device }}"
-        timeout: 60
+    - name: Перезапуск сервера
+      reboot:
+        reboot_timeout: 600
 
-    - name: Создать файловую систему по параметрам
-      filesystem:
-        fstype: "{{ filesystem }}"
-        dev: "{{ raid_device }}"
+    ## Настраиваем зеркало, выделяем /var
 
-    - name: Создать папку для монтирования
-      file:
-        path: "{{ mount_point }}"
-        state: directory
-        mode: '0755'
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: pvcreate {{ var_mirror_1disk }} {{ var_mirror_2disk }}
 
-    - name: Примонтировать RAID
-      mount:
-        path: "{{ mount_point }}"
-        src: "{{ raid_device }}"
-        fstype: "{{ filesystem }}"
-        state: mounted
+    - name: Создать VG для второй рут директории
+      command: vgcreate {{ vg_var_name }} {{ var_mirror_1disk }} {{ var_mirror_2disk }}
 
-    - name: Зафейлить один из дисков
-      command: >
-        mdadm {{ raid_device }} --fail {{ failed_disk }}
+    - name: Создаем дополнительный логический том для директории /var, добавим параметр -m1 для настройки зеркала
+      command: lvcreate -n {{ lv_var_name }} -L 950M -m1 {{ vg_var_name }}
 
-    - name: Убрать из RAID "сломанный" диск
-      command: >
-        mdadm {{ raid_device }} --remove {{ failed_disk }}
+    - name: Создать файловую систему на логическом томе
+      command: mkfs.ext4 /dev/{{ vg_var_name }}/{{ lv_var_name }}
 
-    - name: Вернем диск обратно (как буд-то это новый диск)
-      command: >
-        mdadm {{ raid_device }} --add {{ failed_disk }}
+    - name: Монтируем новый раздел
+      command: mount /dev/{{ vg_var_name }}/{{ lv_var_name }} /mnt
+
+    - name: Копируем все данные оригинального /var
+      command: cp -aR /var/* /mnt/
+
+    - name: Монитируем в var
+      command: umount /mnt && mount /dev/{{ vg_var_name }}/{{ lv_var_name }} /var
+
+    - name: Конфигурируем fstab для автоматического монтирования /var
+      shell: |
+        echo "`blkid | grep var: | awk '{print $2}'` \ /var ext4 defaults 0 0" >> /etc/fstab
+      args:
+        executable: /bin/bash
+
+    ## Выделяем /home
+    - name: Создаем дополнительный логический том для директории /home
+      command: lvcreate -n {{ lv_home_name }} -L 2G /dev/{{ vg_home_name }}
+
+    - name: Создать файловую систему на логическом томе
+      command: mkfs.ext4 /dev/{{ vg_home_name }}/{{ lv_home_name }}
+
+    - name: Монтируем новый раздел
+      command: mount /dev/{{ vg_home_name }}/{{ lv_home_name }} /mnt
+
+    - name: Копирование данных /home в новый том
+      shell: |
+        cp -aR /home/* /mnt/
+        rm -rf /home/*
+        umount /mnt
+      args:
+        executable: /bin/bash
+
+    - name: Монтируем новый раздел
+      command: mount /dev/{{ vg_home_name }}/{{ lv_home_name }} /home
+
+    - name: Конфигурируем fstab для автоматического монтирования /home
+      shell: |
+        echo "`blkid | grep Home | awk '{print $2}'` \ /home xfs defaults 0 0" >> /etc/fstab
+      args:
+        executable: /bin/bash
+
+
