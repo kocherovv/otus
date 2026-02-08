@@ -1,0 +1,16 @@
+---
+- name: Создать RAID
+  hosts: test_hosts
+  become: true
+
+  tasks:
+    - name: Поставить утилиты
+      command: apt install nfs-common -y
+
+    - name: Настроить монтирование nfs ресурса
+      command: echo "{{ server_ip }}:/srv/share/ /mnt nfs vers=3,noauto,x-systemd.automount 0 0" >> /etc/fstab
+
+    - name: Перезапустить демон, применить изменения в файловой системе
+      bash: |
+        systemctl daemon-reload
+        systemctl restart remote-fs.target 
