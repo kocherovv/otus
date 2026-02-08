@@ -1,0 +1,35 @@
+---
+- name: Создать RAID
+  hosts: test_hosts
+  become: true
+
+  tasks:
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: zpool create otus1 mirror {{ var_mirror1_1disk }} {{ var_mirror1_2disk }}
+
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: zpool create otus2 mirror {{ var_mirror2_1disk }} {{ var_mirror2_2disk }}
+
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: zpool create otus3 mirror {{ var_mirror3_1disk }} {{ var_mirror3_2disk }}
+
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: zpool create otus4 mirror {{ var_mirror4_1disk }} {{ var_mirror4_2disk }}
+
+    - name: Создать PV для диска с резервной рутовой директорией
+      command: zpool create otus4 mirror {{ var_mirror5_1disk }} {{ var_mirror5_2disk }}
+
+    - name: Добавляю сжатие
+      bash: | 
+        zfs set compression=lzjb otus1
+        zfs set compression=lz4 otus2
+        zfs set compression=gzip-9 otus3
+        zfs set compression=zle otus4
+
+    - name: Записать данные для сравнения эффективности сжатия
+      bash: for i in {1..4}; do wget -P /otus$i https://gutenberg.org/cache/epub/2600/pg2600.converter.log; done
+
+    - name: Восстановить данные из внешнего снапшота в otus5
+      bash: |
+        wget -O otus_task2.file --no-check-certificate https://drive.usercontent.google.com/download?id=1wgxjih8YZ-cqLqaZVa0lA3h3Y029c3oI&export=download
+        zfs receive otus5/test@today < otus_task2.file
