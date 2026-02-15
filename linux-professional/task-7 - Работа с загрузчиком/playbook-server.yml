@@ -1,0 +1,29 @@
+---
+- name: Создать RAID
+  hosts: test_hosts
+  become: true
+
+  tasks:
+    - name: Поставить утилиты
+      apt:
+        name: nfs-kernel-server
+        state: present
+        update_cache: yes
+
+    - name: Настроить общую директорию
+      bash: |
+        mkdir -p /srv/share/upload
+        chown -R nobody:nogroup /srv/share
+        chmod 0777 /srv/share/upload
+
+    - name: Настроить /etc/exports
+      copy:
+        dest: /etc/exports
+        content: |
+          /srv/share {{ client_subnet }}(rw,sync,root_squash)
+      notify: reload nfs
+
+  handlers:
+    - name: reload nfs
+      command: exportfs -r
+
