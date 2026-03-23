@@ -1,0 +1,10 @@
+server {
+  listen {{ nginx_port }};
+  listen [::]:{{ nginx_port }};
+
+  server_name _;
+
+  location / {
+  return 200 "Nginx works on port {{ nginx_port }}\n";
+  }
+}
