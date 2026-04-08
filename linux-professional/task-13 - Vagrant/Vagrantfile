@@ -1,0 +1,78 @@
+VDISK_MANAGER = "/Applications/VMware Fusion.app/Contents/Library/vmware-vdiskmanager"
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = "bento/ubuntu-22.04"
+
+  config.vm.network "forwarded_port", guest: 80, host: 8080
+
+  config.vm.provider "vmware_desktop" do |vmw|
+    vmw.vmx["displayName"] = "ubuntu-vagrant-lab"
+    vmw.vmx["memsize"]     = "1024"
+    vmw.vmx["numvcpus"]    = "1"
+
+    disk_dir   = File.dirname(__FILE__)
+    disk1_path = File.join(disk_dir, "disk1.vmdk")
+    disk2_path = File.join(disk_dir, "disk2.vmdk")
+
+    # Создаём VMDK через vmware-vdiskmanager (полный путь к бинарю Fusion)
+    # -c создать, -s размер, -a тип адаптера, -t 0 = monolithic sparse
+    unless File.exist?(disk1_path)
+      system("'#{VDISK_MANAGER}' -c -s 1GB -a lsilogic -t 0 '#{disk1_path}'")
+    end
+    unless File.exist?(disk2_path)
+      system("'#{VDISK_MANAGER}' -c -s 1GB -a lsilogic -t 0 '#{disk2_path}'")
+    end
+
+    vmw.vmx["sata0:2.present"]    = "TRUE"
+    vmw.vmx["sata0:2.fileName"]   = disk1_path
+    vmw.vmx["sata0:2.deviceType"] = "disk"
+
+    vmw.vmx["sata0:3.present"]    = "TRUE"
+    vmw.vmx["sata0:3.fileName"]   = disk2_path
+    vmw.vmx["sata0:3.deviceType"] = "disk"
+  end
+
+
+  config.vm.provision "shell", inline: <<-SHELL
+    set -euo pipefail
+
+    echo "=== Disk layout ==="
+    lsblk
+
+    echo "=== Waiting for extra disks ==="
+
+    for dev in /dev/sdb /dev/sdc; do
+      timeout 30 bash -c "until [ -b $dev ]; do sleep 1; done" \
+        || { echo "ERROR: $dev not found! Full layout:"; lsblk; exit 1; }
+      echo "  Found $dev"
+    done
+
+    echo "=== Formatting disks ==="
+    blkid /dev/sdb &>/dev/null \
+      || { mkfs.ext4 -F /dev/sdb && echo "  /dev/sdb -> ext4"; }
+    blkid /dev/sdc &>/dev/null \
+      || { mkfs.ext4 -F /dev/sdc && echo "  /dev/sdc -> ext4"; }
+
+    echo "=== Creating mount points ==="
+    mkdir -p /mnt/disk1 /mnt/disk2
+
+    echo "=== Mounting disks ==="
+    mountpoint -q /mnt/disk1 || mount /dev/sdb /mnt/disk1
+    mountpoint -q /mnt/disk2 || mount /dev/sdc /mnt/disk2
+
+    echo "=== Updating /etc/fstab ==="
+    UUID1=$(blkid -s UUID -o value /dev/sdb)
+    UUID2=$(blkid -s UUID -o value /dev/sdc)
+    grep -q "$UUID1" /etc/fstab \
+      || echo "UUID=$UUID1  /mnt/disk1  ext4  defaults,nofail  0  2" >> /etc/fstab
+    grep -q "$UUID2" /etc/fstab \
+      || echo "UUID=$UUID2  /mnt/disk2  ext4  defaults,nofail  0  2" >> /etc/fstab
+
+    echo "=== Result ==="
+    tail -4 /etc/fstab
+    df -h /mnt/disk1 /mnt/disk2
+    echo "=== Provisioning complete! ==="
+  SHELL
+
+end
